@@ -55,8 +55,20 @@ export async function crawlWebsite(baseUrl, onProgress) {
                     currentUrl: url,
                 });
 
-                // ページに移動
-                const response = await page.goto(url, { waitUntil: 'networkidle2' });
+                // ページに移動（リトライ機能付き）
+                let response;
+                let retries = 3;
+                while (retries > 0) {
+                    try {
+                        response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+                        break;
+                    } catch (err) {
+                        if (retries === 1) throw err;
+                        console.log(`リトライ中 (${url}): ${err.message}`);
+                        retries--;
+                        await new Promise(r => setTimeout(r, 2000)); // 2秒待機
+                    }
+                }
 
                 if (!response || !response.ok()) {
                     console.log(`${url} をスキップします: レスポンスが正常ではありません`);
