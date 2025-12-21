@@ -6,7 +6,7 @@ import puppeteer from 'puppeteer';
  * @param {function} onProgress - 進捗コールバック
  * @returns {Promise<Array>} ページ情報の配列
  */
-export async function crawlWebsite(baseUrl, onProgress) {
+export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
     const browser = await puppeteer.launch({
         headless: 'new',
         args: [
@@ -40,6 +40,12 @@ export async function crawlWebsite(baseUrl, onProgress) {
         );
 
         while (queue.length > 0) {
+            // キャンセルチェック
+            if (checkCancel && checkCancel()) {
+                console.log('クローリング中断（キャンセル）');
+                break;
+            }
+
             const url = queue.shift();
 
             if (visited.has(url)) continue;

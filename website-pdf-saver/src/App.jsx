@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
+import robotImage from './assets/robot.png';
+import './App.css';
 
 function App() {
     const [url, setUrl] = useState('');
@@ -6,6 +8,7 @@ function App() {
     const [status, setStatus] = useState(null);
     const [error, setError] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
+    const [isCanceling, setIsCanceling] = useState(false);
     const pollingRef = useRef(null);
 
     // ステータスのポーリング
@@ -22,10 +25,12 @@ function App() {
                 if (data.status === 'completed') {
                     clearInterval(pollingRef.current);
                     setIsLoading(false);
+                    setIsCanceling(false);
                 } else if (data.status === 'error') {
                     clearInterval(pollingRef.current);
                     setError(data.error);
                     setIsLoading(false);
+                    setIsCanceling(false);
                 }
             } catch (err) {
                 console.error('Status polling error:', err);
@@ -55,6 +60,7 @@ function App() {
         setStatus(null);
         setJobId(null);
         setIsLoading(true);
+        setIsCanceling(false);
 
         try {
             const response = await fetch('/api/crawl', {
@@ -76,6 +82,17 @@ function App() {
         }
     };
 
+    // キャンセル処理
+    const handleCancel = async () => {
+        if (!jobId) return;
+        setIsCanceling(true);
+        try {
+            await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
+        } catch (err) {
+            console.error('Cancellation error:', err);
+        }
+    };
+
     // PDFダウンロード
     const handleDownload = () => {
         if (jobId) {
@@ -85,15 +102,19 @@ function App() {
 
     // ステータステキスト
     const getStatusText = () => {
+        if (isCanceling) return '🛑 キャンセル処理中... (今の分まででPDFを作ります)';
         if (!status) return '';
 
         switch (status.status) {
             case 'crawling':
-                return `🔍 クローリング中... (${status.processedPages}ページ処理済み)`;
+                return `🔍 ロボットが調査中... (${status.processedPages}ページ見つけました)`;
             case 'generating_pdf':
-                return `📄 PDF生成中... (${status.processedPages}/${status.totalPages}ページ)`;
+                return `📄 PDFを作成しています... (${status.processedPages}/${status.totalPages})`;
             case 'completed':
-                return '✅ 完了！PDFをダウンロードできます';
+                if (status.error === 'cancelled') { // 念のため
+                    return '✅ キャンセル完了！ここまでの分をダウンロードできます';
+                }
+                return '✅ 完了しました！';
             case 'error':
                 return '❌ エラーが発生しました';
             default:
@@ -111,45 +132,46 @@ function App() {
         <div className="app">
             <div className="container">
                 <header className="header">
-                    <div className="logo">
-                        <span className="logo-icon">📑</span>
-                        <h1>Website PDF Saver</h1>
-                    </div>
-                    <p className="subtitle">ウェブサイトを一括でPDF保存</p>
+                    <img src={robotImage} alt="Friendly Robot" className="mascot-image" />
+                    <h1>Website PDF Saver</h1>
+                    <p className="subtitle">URLを入れるだけで、ロボットが全部PDFにしてきてくれます！</p>
                 </header>
 
                 <main className="main">
                     <form onSubmit={handleSubmit} className="form">
                         <div className="input-group">
-                            <label htmlFor="url">企業のトップページURL</label>
                             <input
-                                type="url"
+                                type="text"
                                 id="url"
                                 value={url}
                                 onChange={(e) => setUrl(e.target.value)}
-                                placeholder="https://www.example.com/"
+                                placeholder="例：https://www.example.com/"
                                 disabled={isLoading}
                                 autoComplete="url"
                             />
                         </div>
 
-                        <button
-                            type="submit"
-                            className={`submit-btn ${isLoading ? 'loading' : ''}`}
-                            disabled={isLoading}
-                        >
-                            {isLoading ? (
-                                <>
-                                    <span className="spinner"></span>
-                                    処理中...
-                                </>
-                            ) : (
-                                <>
-                                    <span>🚀</span>
-                                    PDF保存を開始
-                                </>
-                            )}
-                        </button>
+                        {!isLoading ? (
+                            <button
+                                type="submit"
+                                className="btn-primary"
+                                disabled={isLoading}
+                            >
+                                🚀 PDF保存をスタート
+                            </button>
+                        ) : (
+                            <div className="loading-controls">
+                                <div className="spinner"></div>
+                                <button
+                                    type="button"
+                                    onClick={handleCancel}
+                                    className="btn-cancel"
+                                    disabled={isCanceling}
+                                >
+                                    {isCanceling ? '停止中...' : '✋ 途中でやめる（そこまでの分を保存）'}
+                                </button>
+                            </div>
+                        )}
                     </form>
 
                     {error && (
@@ -162,13 +184,12 @@ function App() {
                     {status && (
                         <div className="status-panel">
                             <div className="status-header">
-                                <h3>{getStatusText()}</h3>
+                                <h3 className="status-text">{getStatusText()}</h3>
                             </div>
 
-                            {status.currentUrl && status.status === 'crawling' && (
-                                <div className="current-url">
-                                    <span className="label">現在のページ:</span>
-                                    <span className="url">{status.currentUrl}</span>
+                            {status.currentUrl && status.status === 'crawling' && !isCanceling && (
+                                <div className="status-detail">
+                                    見ています: {status.currentUrl}
                                 </div>
                             )}
 
@@ -185,41 +206,27 @@ function App() {
                             )}
 
                             {status.status === 'completed' && (
-                                <button
-                                    onClick={handleDownload}
-                                    className="download-btn"
-                                >
-                                    <span>📥</span>
-                                    PDFをダウンロード
-                                </button>
+                                <div className="download-section">
+                                    <div className="success-message">お待たせしました！準備できました。</div>
+                                    <button
+                                        onClick={handleDownload}
+                                        className="btn-download"
+                                    >
+                                        📥 PDFをダウンロード
+                                    </button>
+                                    <div className="notes">
+                                        ※「途中でやめる」を押した場合でも、集めた分だけダウンロードできます
+                                    </div>
+                                </div>
                             )}
                         </div>
                     )}
 
-                    <div className="info-section">
-                        <h3>💡 使い方</h3>
-                        <ol>
-                            <li>保存したい企業のトップページURLを入力します</li>
-                            <li>「PDF保存を開始」ボタンをクリックします</li>
-                            <li>アプリが自動的に同一ドメイン内のページをクロールします</li>
-                            <li>完了後、「PDFをダウンロード」ボタンが表示されます</li>
-                        </ol>
-
-                        <div className="notes">
-                            <h4>📌 注意事項</h4>
-                            <ul>
-                                <li>同一ドメイン内のページのみが対象です（外部リンクは除外）</li>
-                                <li><strong>ページ数の上限はありません</strong>（サイトの全ページを取得します）</li>
-                                <li>大規模サイトの場合、処理に時間がかかることがあります</li>
-                                <li>テキスト情報は読み取り可能な状態でPDFに保存されます</li>
-                            </ul>
-                        </div>
+                    <div className="info-section notes">
+                        <p>・同一ドメイン（同じサイト）のページを全部自動で集めます。</p>
+                        <p>・ページ数が多くても大丈夫ですが、時間がかかることがあります。</p>
                     </div>
                 </main>
-
-                <footer className="footer">
-                    <p>Website PDF Saver © 2024</p>
-                </footer>
             </div>
         </div>
     );

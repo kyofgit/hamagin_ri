@@ -8,7 +8,7 @@ import fs from 'fs';
  * @param {string} outputPath - 出力ファイルパス
  * @param {function} onProgress - 進捗コールバック
  */
-export async function generatePDF(pages, outputPath, onProgress) {
+export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
     const browser = await puppeteer.launch({
         headless: 'new',
         args: [
@@ -28,6 +28,12 @@ export async function generatePDF(pages, outputPath, onProgress) {
         const page = await browser.newPage();
 
         for (let i = 0; i < pages.length; i++) {
+            // キャンセルチェック
+            if (checkCancel && checkCancel()) {
+                console.log('PDF生成中断（キャンセル）');
+                break;
+            }
+
             const pageData = pages[i];
 
             console.log(`PDF生成中: ${pageData.url}`);

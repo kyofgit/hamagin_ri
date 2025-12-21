@@ -56,6 +56,7 @@ app.post('/api/crawl', async (req, res) => {
         pages: [],
         error: null,
         pdfPath: null,
+        canceled: false, // キャンセル用フラグ
     });
 
     res.json({ jobId });
@@ -64,27 +65,40 @@ app.post('/api/crawl', async (req, res) => {
     (async () => {
         try {
             const job = jobs.get(jobId);
+            const checkCancel = () => job.canceled;
 
             // クローリング実行
             const pages = await crawlWebsite(url, (progress) => {
                 job.totalPages = progress.totalFound;
                 job.processedPages = progress.processed;
                 job.currentUrl = progress.currentUrl;
-            });
+            }, checkCancel);
+
+            if (job.canceled) {
+                console.log('クローリングがキャンセルされました。収集済みページでPDFを作成します。');
+            }
 
             job.pages = pages;
             job.status = 'generating_pdf';
             job.processedPages = 0;
             job.totalPages = pages.length;
 
+            if (pages.length === 0) {
+                throw new Error('ページが見つかりませんでした（キャンセルされたか、エラーが発生しました）');
+            }
+
             // PDF生成
             const pdfPath = path.join(outputDir, `${jobId}.pdf`);
             await generatePDF(pages, pdfPath, (progress) => {
                 job.processedPages = progress.processed;
-            });
+            }, checkCancel);
 
             job.status = 'completed';
             job.pdfPath = pdfPath;
+            if (job.canceled) {
+                console.log('PDF生成がキャンセルされました（部分的に保存されました）。');
+            }
+
         } catch (error) {
             console.error('エラー:', error);
             const job = jobs.get(jobId);
@@ -94,6 +108,17 @@ app.post('/api/crawl', async (req, res) => {
             }
         }
     })();
+});
+
+// キャンセルリクエスト
+app.post('/api/cancel/:jobId', (req, res) => {
+    const { jobId } = req.params;
+    const job = jobs.get(jobId);
+    if (!job) {
+        return res.status(404).json({ error: 'ジョブが見つかりません' });
+    }
+    job.canceled = true;
+    res.json({ message: 'キャンセルを受け付けました' });
 });
 
 // ステータス取得
