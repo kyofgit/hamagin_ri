@@ -1,0 +1,124 @@
+import puppeteer from 'puppeteer';
+import { PDFDocument } from 'pdf-lib';
+import fs from 'fs';
+
+/**
+ * 複数ページのHTMLを一つのPDFとして生成
+ * @param {Array} pages - ページ情報の配列
+ * @param {string} outputPath - 出力ファイルパス
+ * @param {function} onProgress - 進捗コールバック
+ */
+export async function generatePDF(pages, outputPath, onProgress) {
+    const browser = await puppeteer.launch({
+        headless: 'new',
+        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    });
+
+    try {
+        const pdfBuffers = [];
+        const page = await browser.newPage();
+
+        for (let i = 0; i < pages.length; i++) {
+            const pageData = pages[i];
+
+            console.log(`PDF生成中: ${pageData.url}`);
+
+            // 進捗報告
+            onProgress({
+                processed: i + 1,
+                total: pages.length,
+            });
+
+            try {
+                // HTMLを設定
+                await page.setContent(pageData.html, { waitUntil: 'networkidle0', timeout: 30000 });
+
+                // スタイルを調整してPDF向けに最適化
+                await page.evaluate(() => {
+                    // 印刷用スタイルを適用
+                    const style = document.createElement('style');
+                    style.textContent = `
+            @media print {
+              * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              body {
+                margin: 0;
+                padding: 20px;
+              }
+              a {
+                text-decoration: underline;
+              }
+            }
+          `;
+                    document.head.appendChild(style);
+                });
+
+                // ページヘッダーを追加（URL表示）
+                await page.evaluate((url) => {
+                    const header = document.createElement('div');
+                    header.style.cssText = `
+            background: #f0f0f0;
+            padding: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333;
+            font-family: sans-serif;
+            font-size: 12px;
+          `;
+                    header.innerHTML = `<strong>📄 ${url}</strong>`;
+                    document.body.insertBefore(header, document.body.firstChild);
+                }, pageData.url);
+
+                // PDFを生成
+                const pdfBuffer = await page.pdf({
+                    format: 'A4',
+                    printBackground: true,
+                    margin: {
+                        top: '20mm',
+                        right: '15mm',
+                        bottom: '20mm',
+                        left: '15mm',
+                    },
+                });
+
+                pdfBuffers.push(pdfBuffer);
+            } catch (error) {
+                console.error(`${pageData.url} のPDF生成中にエラーが発生しました:`, error.message);
+            }
+        }
+
+        await page.close();
+        await browser.close();
+
+        // 全てのPDFを結合
+        console.log('PDFを結合中...');
+        const mergedPdf = await PDFDocument.create();
+
+        for (const pdfBuffer of pdfBuffers) {
+            try {
+                const pdf = await PDFDocument.load(pdfBuffer);
+                const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+                pages.forEach(page => mergedPdf.addPage(page));
+            } catch (error) {
+                console.error('PDF結合中にエラーが発生しました:', error.message);
+            }
+        }
+
+        // メタデータを設定
+        mergedPdf.setTitle('ウェブサイト一括PDF保存');
+        mergedPdf.setCreator('Website PDF Saver');
+        mergedPdf.setCreationDate(new Date());
+
+        // ファイルに保存
+        const mergedPdfBytes = await mergedPdf.save();
+        fs.writeFileSync(outputPath, mergedPdfBytes);
+
+        console.log(`PDFが保存されました: ${outputPath}`);
+        return outputPath;
+
+    } catch (error) {
+        await browser.close();
+        throw error;
+    }
+}
