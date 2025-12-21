@@ -29,15 +29,17 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
         const queue = [normalizeUrl(baseUrl)];
         const pages = [];
 
-        const page = await browser.newPage();
+        let page;
+        const setupPage = async () => {
+            if (page) await page.close().catch(() => { });
+            page = await browser.newPage();
+            page.setDefaultNavigationTimeout(60000);
+            await page.setUserAgent(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            );
+        };
 
-        // タイムアウト設定
-        page.setDefaultNavigationTimeout(60000);
-
-        // ユーザーエージェントを設定
-        await page.setUserAgent(
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        );
+        await setupPage();
 
         while (queue.length > 0) {
             // キャンセルチェック
@@ -69,8 +71,15 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                         response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
                         break;
                     } catch (err) {
-                        if (retries === 1) throw err;
                         console.log(`リトライ中 (${url}): ${err.message}`);
+                        // エラー時はページを作り直す（クラッシュ対策）
+                        try {
+                            await setupPage();
+                        } catch (setupError) {
+                            console.error('ページの再作成に失敗:', setupError);
+                        }
+
+                        if (retries === 1) throw err;
                         retries--;
                         await new Promise(r => setTimeout(r, 2000)); // 2秒待機
                     }
@@ -131,10 +140,12 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
 
             } catch (error) {
                 console.error(`${url} のクローリング中にエラーが発生しました:`, error.message);
+                // 念のためここでもページ再作成
+                await setupPage().catch(() => { });
             }
         }
 
-        await page.close();
+        if (page) await page.close();
 
         console.log(`クローリング完了。${pages.length} ページが見つかりました。`);
         return pages;
