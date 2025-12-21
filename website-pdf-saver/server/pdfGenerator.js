@@ -25,7 +25,13 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
 
     try {
         const pdfBuffers = [];
-        const page = await browser.newPage();
+        let page;
+        const setupPage = async () => {
+            if (page) await page.close().catch(() => { });
+            page = await browser.newPage();
+        };
+
+        await setupPage();
 
         for (let i = 0; i < pages.length; i++) {
             // キャンセルチェック
@@ -100,10 +106,16 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
                 pdfBuffers.push(pdfBuffer);
             } catch (error) {
                 console.error(`${pageData.url} のPDF生成中にエラーが発生しました:`, error.message);
+                // エラー時はページを作り直す（クラッシュ対策）
+                try {
+                    await setupPage();
+                } catch (setupError) {
+                    console.error('ページの再作成に失敗:', setupError);
+                }
             }
         }
 
-        await page.close();
+        if (page) await page.close();
         await browser.close();
 
         // 全てのPDFを結合
