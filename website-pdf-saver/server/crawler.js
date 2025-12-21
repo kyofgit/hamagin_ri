@@ -53,95 +53,97 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
             if (visited.has(url)) continue;
             visited.add(url);
 
-            try {
-                console.log(`クローリング中: ${url}`);
+            // このURLの処理全体をリトライループで囲む
+            let retries = 3;
+            let success = false;
 
-                // 進捗報告
-                onProgress({
-                    totalFound: queue.length + pages.length + 1,
-                    processed: pages.length,
-                    currentUrl: url,
-                });
+            while (retries > 0 && !success) {
+                try {
+                    console.log(`クローリング中: ${url} (残り試行回数: ${retries})`);
 
-                // ページに移動（リトライ機能付き）
-                let response;
-                let retries = 3;
-                while (retries > 0) {
-                    try {
-                        response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-                        break;
-                    } catch (err) {
-                        console.log(`リトライ中 (${url}): ${err.message}`);
-                        // エラー時はページを作り直す（クラッシュ対策）
-                        try {
-                            await setupPage();
-                        } catch (setupError) {
-                            console.error('ページの再作成に失敗:', setupError);
+                    // 進捗報告
+                    onProgress({
+                        totalFound: queue.length + pages.length + 1,
+                        processed: pages.length,
+                        currentUrl: url,
+                    });
+
+                    // ページに移動
+                    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+                    if (!response || !response.ok()) {
+                        console.log(`${url} をスキップします: レスポンスが正常ではありません`);
+                        success = true; // 正常にスキップできたことにする（リトライしない）
+                        continue;
+                    }
+
+                    // Content-Typeをチェック
+                    const contentType = response.headers()['content-type'] || '';
+                    if (!contentType.includes('text/html')) {
+                        console.log(`${url} をスキップします: HTMLではありません (${contentType})`);
+                        success = true; // 正常にスキップ
+                        continue;
+                    }
+
+                    // ページ情報を取得
+                    const pageInfo = await page.evaluate(() => {
+                        return {
+                            title: document.title,
+                            html: document.documentElement.outerHTML,
+                        };
+                    });
+
+                    pages.push({
+                        url,
+                        title: pageInfo.title,
+                        html: pageInfo.html,
+                    });
+
+                    // 同一ドメインのリンクを収集
+                    const links = await page.evaluate((baseDomain) => {
+                        const anchors = Array.from(document.querySelectorAll('a[href]'));
+                        return anchors
+                            .map(a => a.href)
+                            .filter(href => {
+                                try {
+                                    const linkUrl = new URL(href);
+                                    return linkUrl.hostname === baseDomain ||
+                                        linkUrl.hostname.endsWith('.' + baseDomain);
+                                } catch {
+                                    return false;
+                                }
+                            });
+                    }, baseDomain);
+
+                    // キューに追加
+                    for (const link of links) {
+                        const normalizedLink = normalizeUrl(link);
+                        if (!visited.has(normalizedLink) && !queue.includes(normalizedLink)) {
+                            if (shouldExclude(normalizedLink)) continue;
+                            queue.push(normalizedLink);
                         }
+                    }
 
-                        if (retries === 1) throw err;
-                        retries--;
-                        await new Promise(r => setTimeout(r, 2000)); // 2秒待機
+                    success = true; // 成功
+
+                } catch (error) {
+                    console.error(`${url} の処理中にエラーが発生しました:`, error.message);
+
+                    // エラー時はページを作り直す（クラッシュ対策）
+                    try {
+                        await setupPage();
+                    } catch (setupError) {
+                        console.error('ページの再作成に失敗:', setupError);
+                    }
+
+                    retries--;
+                    if (retries > 0) {
+                        console.log('リトライします...');
+                        await new Promise(r => setTimeout(r, 2000));
+                    } else {
+                        console.error(`${url} の取得を諦めました。`);
                     }
                 }
-
-                if (!response || !response.ok()) {
-                    console.log(`${url} をスキップします: レスポンスが正常ではありません`);
-                    continue;
-                }
-
-                // Content-Typeをチェック
-                const contentType = response.headers()['content-type'] || '';
-                if (!contentType.includes('text/html')) {
-                    console.log(`${url} をスキップします: HTMLではありません (${contentType})`);
-                    continue;
-                }
-
-                // ページ情報を取得
-                const pageInfo = await page.evaluate(() => {
-                    return {
-                        title: document.title,
-                        html: document.documentElement.outerHTML,
-                    };
-                });
-
-                pages.push({
-                    url,
-                    title: pageInfo.title,
-                    html: pageInfo.html,
-                });
-
-                // 同一ドメインのリンクを収集
-                const links = await page.evaluate((baseDomain) => {
-                    const anchors = Array.from(document.querySelectorAll('a[href]'));
-                    return anchors
-                        .map(a => a.href)
-                        .filter(href => {
-                            try {
-                                const linkUrl = new URL(href);
-                                // 同一ドメインかチェック
-                                return linkUrl.hostname === baseDomain ||
-                                    linkUrl.hostname.endsWith('.' + baseDomain);
-                            } catch {
-                                return false;
-                            }
-                        });
-                }, baseDomain);
-
-                // キューに追加
-                for (const link of links) {
-                    const normalizedLink = normalizeUrl(link);
-                    if (!visited.has(normalizedLink) && !queue.includes(normalizedLink)) {
-                        // 特定の拡張子は除外
-                        if (shouldExclude(normalizedLink)) continue;
-                        queue.push(normalizedLink);
-                    }
-                }
-
-            } catch (error) {
-                console.error(`${url} のクローリング中にエラーが発生しました:`, error.message);
-                // 念のためここでもページ再作成
-                await setupPage().catch(() => { });
             }
         }
 
