@@ -31,7 +31,7 @@ export async function generatePDF(pages, outputPath, onProgress) {
 
             try {
                 // HTMLを設定
-                await page.setContent(pageData.html, { waitUntil: 'networkidle0', timeout: 30000 });
+                await page.setContent(pageData.html, { waitUntil: 'networkidle2', timeout: 60000 });
 
                 // スタイルを調整してPDF向けに最適化
                 await page.evaluate(() => {

@@ -23,7 +23,7 @@ export async function crawlWebsite(baseUrl, onProgress) {
         const page = await browser.newPage();
 
         // タイムアウト設定
-        page.setDefaultNavigationTimeout(30000);
+        page.setDefaultNavigationTimeout(60000);
 
         // ユーザーエージェントを設定
         await page.setUserAgent(
