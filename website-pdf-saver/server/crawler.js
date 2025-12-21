@@ -20,9 +20,6 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
-                '--no-first-run',
-                '--no-zygote',
-                '--single-process',
                 '--disable-extensions',
             ],
         });
