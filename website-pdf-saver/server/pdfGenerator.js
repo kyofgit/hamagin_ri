@@ -11,7 +11,16 @@ import fs from 'fs';
 export async function generatePDF(pages, outputPath, onProgress) {
     const browser = await puppeteer.launch({
         headless: 'new',
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
+        args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage', // メモリ不足対策
+            '--disable-gpu',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process', // メモリ節約
+            '--disable-extensions',
+        ],
     });
 
     try {
