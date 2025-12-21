@@ -9,29 +9,47 @@ import fs from 'fs';
  * @param {function} onProgress - 進捗コールバック
  */
 export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
-    const browser = await puppeteer.launch({
-        headless: 'new',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage', // メモリ不足対策
-            '--disable-gpu',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process', // メモリ節約
-            '--disable-extensions',
-        ],
-    });
+    let browser;
+    let page;
 
-    try {
-        const pdfBuffers = [];
-        let page;
-        const setupPage = async () => {
+    const setupBrowser = async () => {
+        if (browser) await browser.close().catch(() => { });
+        browser = await puppeteer.launch({
+            headless: 'new',
+            protocolTimeout: 240000, // タイムアウトを4分に延長
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-extensions',
+            ],
+        });
+    };
+
+    const setupPage = async () => {
+        try {
+            if (!browser || !browser.isConnected()) {
+                await setupBrowser();
+            }
             if (page) await page.close().catch(() => { });
             page = await browser.newPage();
-        };
+        } catch (err) {
+            console.error('PDF生成用ページ/ブラウザの作成に失敗:', err);
+            // ブラウザごと作り直す
+            await setupBrowser();
+            page = await browser.newPage();
+        }
+    };
 
+    try {
+        await setupBrowser();
         await setupPage();
+
+        const pdfBuffers = [];
 
         for (let i = 0; i < pages.length; i++) {
             // キャンセルチェック
@@ -107,16 +125,12 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
             } catch (error) {
                 console.error(`${pageData.url} のPDF生成中にエラーが発生しました:`, error.message);
                 // エラー時はページを作り直す（クラッシュ対策）
-                try {
-                    await setupPage();
-                } catch (setupError) {
-                    console.error('ページの再作成に失敗:', setupError);
-                }
+                await setupPage();
             }
         }
 
-        if (page) await page.close();
-        await browser.close();
+        if (page) await page.close().catch(() => { });
+        if (browser) await browser.close().catch(() => { });
 
         // 全てのPDFを結合
         console.log('PDFを結合中...');
@@ -145,7 +159,7 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
         return outputPath;
 
     } catch (error) {
-        await browser.close();
+        if (browser) await browser.close().catch(() => { });
         throw error;
     }
 }

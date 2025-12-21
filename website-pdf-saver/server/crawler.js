@@ -7,39 +7,60 @@ import puppeteer from 'puppeteer';
  * @returns {Promise<Array>} ページ情報の配列
  */
 export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
-    const browser = await puppeteer.launch({
-        headless: 'new',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-extensions',
-        ],
-    });
+    let browser;
+    let page;
 
-    try {
-        const baseUrlObj = new URL(baseUrl);
-        const baseDomain = baseUrlObj.hostname;
+    const setupBrowser = async () => {
+        if (browser) await browser.close().catch(() => { });
+        browser = await puppeteer.launch({
+            headless: 'new',
+            protocolTimeout: 240000, // タイムアウトを4分に延長
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-zygote',
+                '--single-process',
+                '--disable-extensions',
+            ],
+        });
+    };
 
-        const visited = new Set();
-        const queue = [normalizeUrl(baseUrl)];
-        const pages = [];
-
-        let page;
-        const setupPage = async () => {
+    const setupPage = async () => {
+        try {
+            if (!browser || !browser.isConnected()) {
+                await setupBrowser();
+            }
             if (page) await page.close().catch(() => { });
             page = await browser.newPage();
             page.setDefaultNavigationTimeout(60000);
             await page.setUserAgent(
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             );
-        };
+        } catch (err) {
+            console.error('ページ/ブラウザの作成に失敗しました:', err);
+            // ブラウザごと作り直す
+            await setupBrowser();
+            page = await browser.newPage();
+            page.setDefaultNavigationTimeout(60000);
+            await page.setUserAgent(
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            );
+        }
+    };
 
+    try {
+        await setupBrowser();
         await setupPage();
+
+        const baseUrlObj = new URL(baseUrl);
+        const baseDomain = baseUrlObj.hostname;
+
+        const visited = new Set();
+        const queue = [normalizeUrl(baseUrl)];
+        const pages = [];
 
         while (queue.length > 0) {
             // キャンセルチェック
@@ -73,7 +94,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
 
                     if (!response || !response.ok()) {
                         console.log(`${url} をスキップします: レスポンスが正常ではありません`);
-                        success = true; // 正常にスキップできたことにする（リトライしない）
+                        success = true; // 正常にスキップできたことにする
                         continue;
                     }
 
@@ -81,7 +102,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                     const contentType = response.headers()['content-type'] || '';
                     if (!contentType.includes('text/html')) {
                         console.log(`${url} をスキップします: HTMLではありません (${contentType})`);
-                        success = true; // 正常にスキップ
+                        success = true;
                         continue;
                     }
 
@@ -130,11 +151,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                     console.error(`${url} の処理中にエラーが発生しました:`, error.message);
 
                     // エラー時はページを作り直す（クラッシュ対策）
-                    try {
-                        await setupPage();
-                    } catch (setupError) {
-                        console.error('ページの再作成に失敗:', setupError);
-                    }
+                    await setupPage();
 
                     retries--;
                     if (retries > 0) {
@@ -147,13 +164,12 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
             }
         }
 
-        if (page) await page.close();
-
+        if (page) await page.close().catch(() => { });
         console.log(`クローリング完了。${pages.length} ページが見つかりました。`);
         return pages;
 
     } finally {
-        await browser.close();
+        if (browser) await browser.close().catch(() => { });
     }
 }
 
