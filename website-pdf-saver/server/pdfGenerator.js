@@ -81,6 +81,12 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
 
                 if (!page) await setupPage();
 
+                // 画面表示モードをエミュレート（background graphicsなどを強制表示し、print用CSSによる非表示を回避）
+                await page.emulateMediaType('screen');
+
+                // JSを無効化（SPAの再ハイドレーションによるDOM破壊を防ぐため、収集した静的HTMLをそのままレンダリング）
+                await page.setJavaScriptEnabled(false);
+
                 // ディスクからHTMLを読み込む
                 let htmlContent = '';
                 try {
@@ -90,8 +96,8 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
                     continue; // 読み込めなければスキップ
                 }
 
-                // HTMLを設定
-                await page.setContent(htmlContent, { waitUntil: 'networkidle2', timeout: 60000 });
+                // HTMLを設定 (JS無効なので load イベントで十分)
+                await page.setContent(htmlContent, { waitUntil: 'load', timeout: 60000 });
 
                 // (中略 - unchanged styles and header injection) ...
                 // スタイルを調整してPDF向けに最適化

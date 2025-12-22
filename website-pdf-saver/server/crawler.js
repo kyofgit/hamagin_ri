@@ -121,12 +121,17 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
                     }
 
                     // ページ情報を取得
-                    const pageInfo = await page.evaluate(() => {
+                    const pageInfo = await page.evaluate((currentUrl) => {
+                        // baseタグを注入して相対パスを解決できるようにする
+                        const base = document.createElement('base');
+                        base.href = currentUrl;
+                        document.head.insertBefore(base, document.head.firstChild);
+
                         return {
                             title: document.title,
                             html: document.documentElement.outerHTML,
                         };
-                    });
+                    }, url);
 
                     // HTMLを一時ファイルに保存
                     const htmlFilename = `page_${pageIndex++}.html`;
