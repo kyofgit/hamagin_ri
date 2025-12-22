@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import './App.css';
 
 function App() {
@@ -9,6 +9,53 @@ function App() {
   const [jobId, setJobId] = useState(null);
   const [isCanceling, setIsCanceling] = useState(false);
 
+  // Polling for job status
+  useEffect(() => {
+    if (!jobId || status === 'complete' || status === 'error') {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/status/${jobId}`);
+        if (!res.ok) {
+          console.error('Status fetch failed');
+          return;
+        }
+        const data = await res.json();
+
+        if (data.status === 'crawling') {
+          setStatus('crawling');
+          setProgress({
+            current: data.processedPages || 0,
+            total: data.totalPages || 0,
+            message: `ページ収集中: ${data.processedPages || 0} / ${data.totalPages || 0}`,
+          });
+        } else if (data.status === 'generating_pdf') {
+          setStatus('generating');
+          setProgress({
+            current: data.processedPages || 0,
+            total: data.totalPages || 0,
+            message: `PDF作成中: ${data.processedPages || 0} / ${data.totalPages || 0}`,
+          });
+        } else if (data.status === 'completed') {
+          setStatus('complete');
+          setDownloadUrl(`/api/download/${jobId}`);
+          setProgress(prev => ({ ...prev, message: '完了しました！' }));
+          clearInterval(interval);
+        } else if (data.status === 'error') {
+          setStatus('error');
+          setProgress(prev => ({ ...prev, message: `エラー: ${data.error}` }));
+          clearInterval(interval);
+        }
+      } catch (error) {
+        console.error('Polling error:', error);
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [jobId, status]);
+
   const startProcess = async () => {
     if (!url) {
       alert('URLを入力してください');
@@ -16,12 +63,14 @@ function App() {
     }
 
     setStatus('crawling');
-    setProgress({ current: 0, total: 0, message: 'ウェブサイトを解析中...' });
+    setProgress({ current: 0, total: 0, message: 'サーバーに接続中...' });
     setDownloadUrl('');
     setIsCanceling(false);
+    setJobId(null);
 
     try {
-      const response = await fetch('/api/process', {
+      // Call the correct endpoint: /api/crawl
+      const response = await fetch('/api/crawl', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -30,64 +79,18 @@ function App() {
       });
 
       if (!response.ok) {
-        throw new Error('開始リクエストに失敗しました');
+        const errData = await response.json();
+        throw new Error(errData.error || '開始リクエストに失敗しました');
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const data = await response.json();
+      setJobId(data.jobId); // This triggers the useEffect polling
+      setProgress({ current: 0, total: 0, message: 'クローリングを開始しました...' });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = JSON.parse(line.slice(6));
-
-            if (data.jobId) {
-              setJobId(data.jobId);
-            }
-
-            if (data.status === 'crawling') {
-              setStatus('crawling');
-              setProgress({
-                current: data.processed,
-                total: data.totalFound,
-                message: `ページ収集中: ${data.processed} / ${data.totalFound} (${data.currentUrl || ''})`,
-              });
-            } else if (data.status === 'generating') {
-              setStatus('generating');
-              setProgress({
-                current: data.processed,
-                total: data.total,
-                message: `PDF作成中: ${data.processed} / ${data.total}`,
-              });
-            } else if (data.status === 'complete') {
-              setStatus('complete');
-              setDownloadUrl(data.downloadUrl);
-              setProgress({ ...progress, message: '完了しました' });
-            } else if (data.status === 'canceled') {
-              setStatus('canceled'); // New canceled state
-              if (data.downloadUrl) {
-                setDownloadUrl(data.downloadUrl);
-                setProgress({ ...progress, message: '処理は中断されましたが、途中までのPDFをダウンロードできます。' });
-              } else {
-                setProgress({ ...progress, message: '処理がキャンセルされました。' });
-              }
-            } else if (data.status === 'error') {
-              setStatus('error');
-              setProgress({ ...progress, message: `エラー: ${data.message}` });
-            }
-          }
-        }
-      }
     } catch (error) {
       console.error('Error:', error);
       setStatus('error');
-      setProgress({ ...progress, message: '通信エラーが発生しました' });
+      setProgress({ current: 0, total: 0, message: error.message || '通信エラーが発生しました' });
     }
   };
 
@@ -96,11 +99,15 @@ function App() {
     setIsCanceling(true);
     try {
       await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
+      // Status will be updated via polling
     } catch (error) {
       console.error('Cancel failed:', error);
       setIsCanceling(false);
     }
   };
+
+  // Calculate progress percentage
+  const progressPercent = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
 
   // ステータスに応じた表示ヘルパー
   const getStatusDisplay = () => {
@@ -217,12 +224,27 @@ function App() {
             <h2 className="status-text">{statusInfo.title}</h2>
             <p className="status-subtext">{statusInfo.desc}</p>
 
+            {/* Real-time Progress Bar */}
+            {(status === 'crawling' || status === 'generating') && (
+              <div className="progress-section">
+                <div className="progress-bar-container">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${progressPercent}%` }}
+                  ></div>
+                </div>
+                <div className="progress-text">
+                  {progress.current} / {progress.total} ページ ({progressPercent}%)
+                </div>
+              </div>
+            )}
+
             {downloadUrl && (
               <div style={{ marginTop: '2rem' }}>
                 <a href={downloadUrl} className="btn-download" download>
                   📥 PDFをダウンロード
                 </a>
-                {(status === 'canceled' && <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#666' }}>※中断時点までのデータが含まれています</p>)}
+                {status === 'canceled' && <p style={{ marginTop: '1rem', fontSize: '0.9rem', color: '#666' }}>※中断時点までのデータが含まれています</p>}
               </div>
             )}
           </div>
