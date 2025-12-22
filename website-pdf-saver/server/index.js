@@ -45,6 +45,8 @@ app.post('/api/crawl', async (req, res) => {
         return res.status(400).json({ error: '無効なURL形式です' });
     }
 
+    const jobId = uuidv4();
+
     // 一時保存用ディレクトリ
     const tempDir = path.join(outputDir, 'temp', jobId);
     if (!fs.existsSync(tempDir)) {
