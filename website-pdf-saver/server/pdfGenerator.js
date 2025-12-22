@@ -72,6 +72,15 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
             });
 
             try {
+                // 定期的にブラウザを再起動（5ページごと）
+                if (i > 0 && i % 5 === 0) {
+                    console.log('メモリ解放のためブラウザを再起動します...');
+                    await setupBrowser();
+                    page = null;
+                }
+
+                if (!page) await setupPage();
+
                 // ディスクからHTMLを読み込む
                 let htmlContent = '';
                 try {
@@ -84,6 +93,7 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
                 // HTMLを設定
                 await page.setContent(htmlContent, { waitUntil: 'networkidle2', timeout: 60000 });
 
+                // (中略 - unchanged styles and header injection) ...
                 // スタイルを調整してPDF向けに最適化
                 await page.evaluate(() => {
                     const style = document.createElement('style');
@@ -120,8 +130,8 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
                     document.body.insertBefore(header, document.body.firstChild);
                 }, pageData.url);
 
-                // PDFを生成（バッファとして取得せず、一旦ファイルに書き出すのもありだが、
-                // page.pdf()はBufferを返すので、それを即座に書き出す）
+
+                // PDFを生成
                 const pdfBuffer = await page.pdf({
                     format: 'A4',
                     printBackground: true,
@@ -137,9 +147,6 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
                 const tempPdfPath = path.join(tempDir, `pdf_${i}.pdf`);
                 fs.writeFileSync(tempPdfPath, pdfBuffer);
                 pdfPaths.push(tempPdfPath);
-
-                // メモリ解放（V8のGCを助けるため）
-                // htmlContent = null; // ローカル変数なのでループ毎に解放されるはずだが念のため
 
             } catch (error) {
                 console.error(`${pageData.url} のPDF生成中にエラーが発生しました:`, error.message);

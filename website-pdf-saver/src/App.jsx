@@ -1,235 +1,233 @@
-import { useState, useEffect, useRef } from 'react';
-import robotImage from './assets/robot.png';
+```javascript
+import { useState, useEffect } from 'react';
 import './App.css';
+import techBg from './assets/modern_tech_background.png';
 
 function App() {
-    const [url, setUrl] = useState('');
-    const [jobId, setJobId] = useState(null);
-    const [status, setStatus] = useState(null);
-    const [error, setError] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
-    const [isCanceling, setIsCanceling] = useState(false);
-    const pollingRef = useRef(null);
+  const [url, setUrl] = useState('');
+  const [jobId, setJobId] = useState(null);
+  const [status, setStatus] = useState(null); // 'crawling', 'generating_pdf', 'completed', 'error', 'canceled'
+  const [progress, setProgress] = useState({ total: 0, processed: 0, currentUrl: '' });
+  const [downloadUrl, setDownloadUrl] = useState(null);
+  const [pages, setPages] = useState([]); // List of found pages
+  const [errorMessage, setErrorMessage] = useState('');
+  const [isCanceling, setIsCanceling] = useState(false);
 
-    // ステータスのポーリング
-    useEffect(() => {
-        if (!jobId) return;
-
-        const pollStatus = async () => {
-            try {
-                const response = await fetch(`/api/status/${jobId}`);
-                const data = await response.json();
-
-                setStatus(data);
-
-                if (data.status === 'completed') {
-                    clearInterval(pollingRef.current);
-                    setIsLoading(false);
-                    setIsCanceling(false);
-                } else if (data.status === 'error') {
-                    clearInterval(pollingRef.current);
-                    setError(data.error);
-                    setIsLoading(false);
-                    setIsCanceling(false);
-                }
-            } catch (err) {
-                console.error('Status polling error:', err);
-            }
-        };
-
-        pollingRef.current = setInterval(pollStatus, 1000);
-        pollStatus(); // 即座に最初のポーリング
-
-        return () => {
-            if (pollingRef.current) {
-                clearInterval(pollingRef.current);
-            }
-        };
-    }, [jobId]);
-
-    // クローリング開始
-    const handleSubmit = async (e) => {
-        e.preventDefault();
-
-        if (!url) {
-            setError('URLを入力してください');
-            return;
-        }
-
-        setError(null);
-        setStatus(null);
-        setJobId(null);
-        setIsLoading(true);
-        setIsCanceling(false);
-
+  // Poll status
+  useEffect(() => {
+    let interval;
+    if (jobId && status !== 'completed' && status !== 'error' && !isCanceling) {
+      interval = setInterval(async () => {
         try {
-            const response = await fetch('/api/crawl', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ url }),
+          const res = await fetch(`/ api / status / ${ jobId } `);
+          if (res.ok) {
+            const data = await res.json();
+            
+            // Map backend status to frontend state
+            if (data.status === 'crawling') setStatus('crawling');
+            else if (data.status === 'generating_pdf') setStatus('generating_pdf');
+            else if (data.status === 'completed') {
+              setStatus('completed');
+              setDownloadUrl(`/ api / download / ${ jobId } `);
+            } else if (data.status === 'error') {
+               setStatus('error');
+               setErrorMessage(data.error);
+            }
+
+            setProgress({
+              total: data.totalPages,
+              processed: data.processedPages,
+              currentUrl: data.currentUrl,
             });
 
-            const data = await response.json();
-
-            if (!response.ok) {
-                throw new Error(data.error || 'エラーが発生しました');
+            // Fetch pages list if crawling
+            if (data.status === 'crawling' || data.status === 'generating_pdf' || data.status === 'completed') {
+               try {
+                  const pagesRes = await fetch(`/ api / pages / ${ jobId } `);
+                  if (pagesRes.ok) {
+                      const pagesData = await pagesRes.json();
+                      setPages(pagesData.pages);
+                  }
+               } catch(e) { /* ignore */ }
             }
 
-            setJobId(data.jobId);
-        } catch (err) {
-            setError(err.message);
-            setIsLoading(false);
+          }
+        } catch (error) {
+          console.error('Status check failed', error);
         }
-    };
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [jobId, status, isCanceling]);
 
-    // キャンセル処理
-    const handleCancel = async () => {
-        if (!jobId) return;
-        setIsCanceling(true);
-        try {
-            await fetch(`/api/cancel/${jobId}`, { method: 'POST' });
-        } catch (err) {
-            console.error('Cancellation error:', err);
-        }
-    };
+  const startJob = async () => {
+    if (!url) return;
+    setStatus('starting');
+    setErrorMessage('');
+    setPages([]);
+    setProgress({ total: 0, processed: 0, currentUrl: '' });
+    setIsCanceling(false);
+    setDownloadUrl(null);
 
-    // PDFダウンロード
-    const handleDownload = () => {
-        if (jobId) {
-            window.location.href = `/api/download/${jobId}`;
-        }
-    };
+    try {
+      const res = await fetch('/api/crawl', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
 
-    // ステータステキスト
-    const getStatusText = () => {
-        if (isCanceling) return '🛑 キャンセル処理中... (今の分まででPDFを作ります)';
-        if (!status) return '';
+      if (res.ok) {
+        const data = await res.json();
+        setJobId(data.jobId);
+        setStatus('crawling');
+      } else {
+        const err = await res.json();
+        setErrorMessage(err.error || '開始できませんでした');
+        setStatus('error');
+      }
+    } catch (error) {
+      setErrorMessage('サーバーに接続できません');
+      setStatus('error');
+    }
+  };
 
-        switch (status.status) {
-            case 'crawling':
-                return `🔍 ロボットが調査中... (${status.processedPages}ページ見つけました)`;
-            case 'generating_pdf':
-                return `📄 PDFを作成しています... (${status.processedPages}/${status.totalPages})`;
-            case 'completed':
-                if (status.error === 'cancelled') { // 念のため
-                    return '✅ キャンセル完了！ここまでの分をダウンロードできます';
-                }
-                return '✅ 完了しました！';
-            case 'error':
-                return '❌ エラーが発生しました';
-            default:
-                return '処理中...';
-        }
-    };
+  const cancelJob = async () => {
+      if (!jobId) return;
+      setIsCanceling(true);
+      try {
+          await fetch(`/ api / cancel / ${ jobId } `, { method: 'POST' });
+          // Force status update logic to wait for backend to finish up
+          setStatus('canceling');
+      } catch (e) {
+          console.error("Cancel failed", e);
+          setIsCanceling(false);
+      }
+  };
 
-    // 進捗率の計算
-    const getProgress = () => {
-        if (!status || status.totalPages === 0) return 0;
-        return Math.round((status.processedPages / status.totalPages) * 100);
-    };
 
-    return (
-        <div className="app">
-            <div className="container">
-                <header className="header">
-                    <img src={robotImage} alt="Friendly Robot" className="mascot-image" />
-                    <h1>Website PDF Saver</h1>
-                    <p className="subtitle">URLを入れるだけで、ロボットが全部PDFにしてきてくれます！</p>
-                </header>
+  // Helper to determine status display
+  const getStatusDisplay = () => {
+      if (status === 'starting') return { icon: '🚀', text: '起動中...', sub: '準備しています' };
+      if (status === 'crawling') return { icon: '🔍', text: 'スキャン中', sub: `ページを探索しています... ${ progress.processed } 件` };
+      if (status === 'generating_pdf') return { icon: '⚙️', text: 'PDF化中...', sub: 'ドキュメントを生成しています' };
+      if (status === 'completed') return { icon: '✅', text: '完了', sub: 'ダウンロード準備OK' };
+      if (status === 'error') return { icon: '❌', text: 'エラー', sub: errorMessage };
+      if (status === 'canceling') return { icon: '🛑', text: '停止中...', sub: '現在の処理を完了させています' };
+      return { icon: '💻', text: '待機中', sub: 'URLを入力してスタート' };
+  };
 
-                <main className="main">
-                    <form onSubmit={handleSubmit} className="form">
-                        <div className="input-group">
-                            <input
-                                type="text"
-                                id="url"
-                                value={url}
-                                onChange={(e) => setUrl(e.target.value)}
-                                placeholder="例：https://www.example.com/"
-                                disabled={isLoading}
-                                autoComplete="url"
-                            />
-                        </div>
+  const statusInfo = getStatusDisplay();
 
-                        {!isLoading ? (
-                            <button
-                                type="submit"
-                                className="btn-primary"
-                                disabled={isLoading}
-                            >
-                                🚀 PDF保存をスタート
-                            </button>
-                        ) : (
-                            <div className="loading-controls">
-                                <div className="spinner"></div>
-                                <button
-                                    type="button"
-                                    onClick={handleCancel}
-                                    className="btn-cancel"
-                                    disabled={isCanceling}
-                                >
-                                    {isCanceling ? '停止中...' : '✋ 途中でやめる（そこまでの分を保存）'}
-                                </button>
-                            </div>
-                        )}
-                    </form>
+  return (
+    <div className="app-container" style={{ backgroundImage: `url(${ techBg })` }}>
+      <header className="app-header">
+        <div className="brand-logo" style={{fontSize: '2rem'}}>📑</div>
+        <h1 className="brand-title">PDF SAVER PRO</h1>
+      </header>
 
-                    {error && (
-                        <div className="error-message">
-                            <span>⚠️</span>
-                            {error}
-                        </div>
-                    )}
+      <main className="main-content">
+        
+        {/* Left Column: Controls */}
+        <div className="control-panel">
+          
+          {/* Status Card */}
+          <div className="card status-card">
+            <div className="status-indicator">{statusInfo.icon}</div>
+            <div className="status-text">{statusInfo.text}</div>
+            <div className="status-subtext">{statusInfo.sub}</div>
 
-                    {status && (
-                        <div className="status-panel">
-                            <div className="status-header">
-                                <h3 className="status-text">{getStatusText()}</h3>
-                            </div>
+            {/* Progress Bar */}
+            {(status === 'crawling' || status === 'generating_pdf' || status === 'canceling') && (
+               <div className="progress-container">
+                 <div className="progress-bar" style={{ width: '100%' }}></div>
+               </div>
+            )}
+             {status === 'generating_pdf' && progress.total > 0 && (
+                <div style={{fontSize: '0.8rem', color: '#aaa', marginTop: '5px'}}>
+                    生成進捗: {progress.processed} / {progress.total}
+                </div>
+            )}
+          </div>
 
-                            {status.currentUrl && status.status === 'crawling' && !isCanceling && (
-                                <div className="status-detail">
-                                    見ています: {status.currentUrl}
-                                </div>
-                            )}
+          {/* Input Card */}
+          <div className="card input-card">
+            <div className="input-group">
+              <label className="input-label">TARGET URL</label>
+              <input 
+                type="text" 
+                className="url-input" 
+                placeholder="https://example.com" 
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={status === 'crawling' || status === 'generating_pdf' || status === 'canceling'}
+              />
+            </div>
+          </div>
 
-                            {(status.status === 'crawling' || status.status === 'generating_pdf') && (
-                                <div className="progress-container">
-                                    <div className="progress-bar">
-                                        <div
-                                            className="progress-fill"
-                                            style={{ width: `${getProgress()}%` }}
-                                        ></div>
-                                    </div>
-                                    <span className="progress-text">{getProgress()}%</span>
-                                </div>
-                            )}
+          {/* Action Buttons */}
+          <div className="action-buttons">
+            {!jobId || status === 'completed' || status === 'error' ? (
+                <button 
+                className="btn btn-primary" 
+                onClick={startJob}
+                disabled={!url || status === 'starting'}
+                >
+                <span>▶ START SCAN</span>
+                </button>
+            ) : (
+                <button 
+                className="btn btn-danger" 
+                onClick={cancelJob}
+                disabled={isCanceling || status === 'canceling'}
+                >
+                <span>{isCanceling ? 'STOPPING...' : '⏹ STOP & SAVE'}</span>
+                </button>
+            )}
+          </div>
 
-                            {status.status === 'completed' && (
-                                <div className="download-section">
-                                    <div className="success-message">お待たせしました！準備できました。</div>
-                                    <button
-                                        onClick={handleDownload}
-                                        className="btn-download"
-                                    >
-                                        📥 PDFをダウンロード
-                                    </button>
-                                    <div className="notes">
-                                        ※「途中でやめる」を押した場合でも、集めた分だけダウンロードできます
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                    )}
+             {/* Download Card (Appears when done) */}
+            {downloadUrl && (
+            <div className="card" style={{marginTop: '20px', borderColor: '#4facfe'}}>
+                <a href={downloadUrl} className="btn btn-primary" style={{textDecoration: 'none'}}>
+                  📥 DOWNLOAD PDF
+                </a>
+            </div>
+            )}
 
-                    <div className="info-section notes">
-                        <p>・同一ドメイン（同じサイト）のページを全部自動で集めます。</p>
-                        <p>・ページ数が多くても大丈夫ですが、時間がかかることがあります。</p>
+        </div>
+
+        {/* Right Column: Information & Logs */}
+        <div className="info-panel">
+            <div className="results-area">
+                <div className="results-header">
+                    <div className="results-title">
+                        <span>DETECTED PAGES</span>
+                        {pages.length > 0 && <span className="page-count">{pages.length}</span>}
                     </div>
-                </main>
+                </div>
+                <ul className="pages-list">
+                    {pages.map((p, i) => (
+                        <li key={i} className="page-item">
+                            <span className="page-icon">📄</span>
+                            <div className="page-info">
+                                <div className="page-title">{p.title || 'No Title'}</div>
+                                <div className="page-url">{p.url}</div>
+                            </div>
+                        </li>
+                    ))}
+                    {pages.length === 0 && (
+                        <li className="page-item" style={{justifyContent: 'center', color: '#64748b'}}>
+                            Waiting for results...
+                        </li>
+                    )}
+                </ul>
             </div>
         </div>
-    );
+
+      </main>
+    </div>
+  );
 }
 
 export default App;
+```

@@ -81,9 +81,18 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
             let retries = 3;
             let success = false;
 
+            let processedCount = 0;
+
             while (retries > 0 && !success) {
                 try {
                     console.log(`クローリング中: ${url} (残り試行回数: ${retries})`);
+
+                    // 定期的にブラウザを再起動してメモリを解放（5ページごと）
+                    if (processedCount > 0 && processedCount % 5 === 0) {
+                        console.log('メモリ解放のためブラウザを再起動します...');
+                        await setupBrowser();
+                        page = null; // ページ変数をリセット
+                    }
 
                     if (!page) await setupPage();
 
@@ -129,6 +138,9 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
                         title: pageInfo.title,
                         htmlPath: htmlPath, // メモリにはパスだけ持つ
                     });
+
+                    // カウントアップ
+                    processedCount++;
 
                     // 同一ドメインのリンクを収集
                     const links = await page.evaluate((baseDomain) => {
