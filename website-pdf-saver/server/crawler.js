@@ -12,40 +12,72 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
     let browser;
     let page;
 
-    // ... (setupBrowser is unchanged) ...
     const setupBrowser = async () => {
-        if (browser) await browser.close().catch(() => { });
+        if (browser) {
+            try {
+                await browser.close();
+            } catch (e) {
+                // Ignore close errors
+            }
+        }
+        console.log('Puppeteerブラウザを起動中...');
         browser = await puppeteer.launch({
             headless: 'new',
-            protocolTimeout: 240000,
+            protocolTimeout: 120000, // 2分のタイムアウト
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
                 '--disable-gpu',
                 '--disable-extensions',
+                '--disable-software-rasterizer',
+                '--disable-background-networking',
+                '--disable-default-apps',
+                '--disable-sync',
+                '--metrics-recording-only',
+                '--mute-audio',
+                '--no-first-run',
+                '--safebrowsing-disable-auto-update',
             ],
         });
+        console.log('ブラウザ起動完了');
     };
 
-    // ... (setupPage is unchanged) ...
     const setupPage = async () => {
         try {
             if (!browser || !browser.isConnected()) {
                 await setupBrowser();
             }
-            if (page) await page.close().catch(() => { });
+            if (page) {
+                try {
+                    await page.close();
+                } catch (e) {
+                    // Ignore
+                }
+            }
             page = await browser.newPage();
-            page.setDefaultNavigationTimeout(60000);
+            page.setDefaultNavigationTimeout(30000); // 30秒に短縮
+            page.setDefaultTimeout(30000);
             await page.setUserAgent(
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             );
+            // リソースをブロックして高速化
+            await page.setRequestInterception(true);
+            page.on('request', (req) => {
+                const resourceType = req.resourceType();
+                // 画像、フォント、メディアをブロック
+                if (['image', 'font', 'media', 'stylesheet'].includes(resourceType)) {
+                    req.abort();
+                } else {
+                    req.continue();
+                }
+            });
         } catch (err) {
-            console.error('ページ/ブラウザの作成に失敗しました:', err);
-            // ブラウザごと作り直す
+            console.error('ページ/ブラウザの作成に失敗:', err.message);
             await setupBrowser();
             page = await browser.newPage();
-            page.setDefaultNavigationTimeout(60000);
+            page.setDefaultNavigationTimeout(30000);
+            page.setDefaultTimeout(30000);
             await page.setUserAgent(
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             );
@@ -64,6 +96,7 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
         const pages = [];
 
         let pageIndex = 0;
+        let processedCount = 0; // ★ ループ外で宣言
 
         while (queue.length > 0) {
             // キャンセルチェック
@@ -77,127 +110,154 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
             if (visited.has(url)) continue;
             visited.add(url);
 
-            // このURLの処理全体をリトライループで囲む
-            let retries = 3;
-            let success = false;
+            // 定期的にブラウザを再起動してメモリを解放（3ページごと）
+            if (processedCount > 0 && processedCount % 3 === 0) {
+                console.log(`${processedCount}ページ処理済み。メモリ解放のためブラウザを再起動...`);
+                await setupBrowser();
+                await setupPage();
+            }
 
-            let processedCount = 0;
+            // このURLの処理（リトライあり）
+            let retries = 2; // リトライ回数を減らす
+            let success = false;
 
             while (retries > 0 && !success) {
                 try {
-                    console.log(`クローリング中: ${url} (残り試行回数: ${retries})`);
+                    console.log(`クローリング中: ${url}`);
 
-                    // 定期的にブラウザを再起動してメモリを解放（5ページごと）
-                    if (processedCount > 0 && processedCount % 5 === 0) {
-                        console.log('メモリ解放のためブラウザを再起動します...');
-                        await setupBrowser();
-                        page = null; // ページ変数をリセット
+                    // ★ ウォッチドッグタイマー付きでページ処理
+                    const pageResult = await Promise.race([
+                        processPage(page, url, baseDomain, tempDir, pageIndex),
+                        new Promise((_, reject) =>
+                            setTimeout(() => reject(new Error('ページ処理タイムアウト（45秒）')), 45000)
+                        )
+                    ]);
+
+                    if (pageResult) {
+                        pages.push(pageResult.pageData);
+                        pageIndex++;
+                        processedCount++; // ★ 成功時のみインクリメント
+
+                        // 新しいリンクをキューに追加
+                        for (const link of pageResult.links) {
+                            const normalizedLink = normalizeUrl(link);
+                            if (!visited.has(normalizedLink) && !queue.includes(normalizedLink)) {
+                                if (!shouldExclude(normalizedLink)) {
+                                    queue.push(normalizedLink);
+                                }
+                            }
+                        }
                     }
 
-                    if (!page) await setupPage();
+                    success = true;
 
                     // 進捗報告
                     onProgress({
-                        totalFound: queue.length + pages.length + 1,
+                        totalFound: queue.length + pages.length,
                         processed: pages.length,
                         currentUrl: url,
                     });
 
-                    // ページに移動
-                    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-                    if (!response || !response.ok()) {
-                        console.log(`${url} をスキップします: レスポンスが正常ではありません`);
-                        success = true;
-                        continue;
-                    }
-
-                    // Content-Typeをチェック
-                    const contentType = response.headers()['content-type'] || '';
-                    if (!contentType.includes('text/html')) {
-                        console.log(`${url} をスキップします: HTMLではありません (${contentType})`);
-                        success = true;
-                        continue;
-                    }
-
-                    // ページ情報を取得
-                    const pageInfo = await page.evaluate((currentUrl) => {
-                        // baseタグを注入して相対パスを解決できるようにする
-                        const base = document.createElement('base');
-                        base.href = currentUrl;
-                        document.head.insertBefore(base, document.head.firstChild);
-
-                        return {
-                            title: document.title,
-                            html: document.documentElement.outerHTML,
-                        };
-                    }, url);
-
-                    // HTMLを一時ファイルに保存
-                    const htmlFilename = `page_${pageIndex++}.html`;
-                    const htmlPath = path.join(tempDir, htmlFilename);
-                    fs.writeFileSync(htmlPath, pageInfo.html);
-
-                    pages.push({
-                        url,
-                        title: pageInfo.title,
-                        htmlPath: htmlPath, // メモリにはパスだけ持つ
-                    });
-
-                    // カウントアップ
-                    processedCount++;
-
-                    // 同一ドメインのリンクを収集
-                    const links = await page.evaluate((baseDomain) => {
-                        const anchors = Array.from(document.querySelectorAll('a[href]'));
-                        return anchors
-                            .map(a => a.href)
-                            .filter(href => {
-                                try {
-                                    const linkUrl = new URL(href);
-                                    return linkUrl.hostname === baseDomain ||
-                                        linkUrl.hostname.endsWith('.' + baseDomain);
-                                } catch {
-                                    return false;
-                                }
-                            });
-                    }, baseDomain);
-
-                    // キューに追加
-                    for (const link of links) {
-                        const normalizedLink = normalizeUrl(link);
-                        if (!visited.has(normalizedLink) && !queue.includes(normalizedLink)) {
-                            if (shouldExclude(normalizedLink)) continue;
-                            queue.push(normalizedLink);
-                        }
-                    }
-
-                    success = true; // 成功
-
                 } catch (error) {
-                    console.error(`${url} の処理中にエラーが発生しました:`, error.message);
-
-                    // エラー時はページを作り直す（クラッシュ対策）
-                    await setupPage().catch(e => console.error('リカバリー失敗:', e));
-
+                    console.error(`[ERROR] ${url}: ${error.message}`);
                     retries--;
+
                     if (retries > 0) {
-                        console.log('リトライします...');
-                        await new Promise(r => setTimeout(r, 2000));
+                        console.log('ページ再作成後リトライ...');
+                        await setupPage().catch(() => { });
+                        await new Promise(r => setTimeout(r, 1000));
                     } else {
-                        console.error(`${url} の取得を諦めました。`);
+                        console.log(`${url} をスキップします`);
+                        processedCount++; // スキップしてもカウント（メモリ解放トリガー用）
                     }
                 }
             }
         }
 
-        if (page) await page.close().catch(() => { });
-        console.log(`クローリング完了。${pages.length} ページが見つかりました。`);
+        console.log(`クローリング完了。${pages.length} ページを取得`);
         return pages;
 
     } finally {
-        if (browser) await browser.close().catch(() => { });
+        if (page) {
+            try { await page.close(); } catch (e) { }
+        }
+        if (browser) {
+            try { await browser.close(); } catch (e) { }
+        }
     }
+}
+
+/**
+ * 1ページを処理する関数（分離してタイムアウト制御しやすく）
+ */
+async function processPage(page, url, baseDomain, tempDir, pageIndex) {
+    const response = await page.goto(url, {
+        waitUntil: 'domcontentloaded',
+        timeout: 25000
+    });
+
+    if (!response) {
+        console.log(`${url}: レスポンスなし、スキップ`);
+        return null;
+    }
+
+    const status = response.status();
+    if (status >= 400) {
+        console.log(`${url}: HTTPエラー ${status}、スキップ`);
+        return null;
+    }
+
+    // Content-Typeをチェック
+    const contentType = response.headers()['content-type'] || '';
+    if (!contentType.includes('text/html')) {
+        console.log(`${url}: HTMLではない (${contentType})、スキップ`);
+        return null;
+    }
+
+    // ページ情報を取得
+    const pageInfo = await page.evaluate((currentUrl) => {
+        // baseタグを注入
+        const base = document.createElement('base');
+        base.href = currentUrl;
+        if (document.head) {
+            document.head.insertBefore(base, document.head.firstChild);
+        }
+
+        return {
+            title: document.title || 'No Title',
+            html: document.documentElement.outerHTML,
+        };
+    }, url);
+
+    // HTMLを一時ファイルに保存
+    const htmlFilename = `page_${pageIndex}.html`;
+    const htmlPath = path.join(tempDir, htmlFilename);
+    fs.writeFileSync(htmlPath, pageInfo.html);
+
+    // 同一ドメインのリンクを収集
+    const links = await page.evaluate((baseDomain) => {
+        const anchors = Array.from(document.querySelectorAll('a[href]'));
+        return anchors
+            .map(a => a.href)
+            .filter(href => {
+                try {
+                    const linkUrl = new URL(href);
+                    return linkUrl.hostname === baseDomain ||
+                        linkUrl.hostname.endsWith('.' + baseDomain);
+                } catch {
+                    return false;
+                }
+            });
+    }, baseDomain);
+
+    return {
+        pageData: {
+            url,
+            title: pageInfo.title,
+            htmlPath: htmlPath,
+        },
+        links: links,
+    };
 }
 
 /**
@@ -206,9 +266,7 @@ export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
 function normalizeUrl(url) {
     try {
         const urlObj = new URL(url);
-        // フラグメントを削除
         urlObj.hash = '';
-        // 末尾のスラッシュを統一
         let pathname = urlObj.pathname;
         if (pathname !== '/' && pathname.endsWith('/')) {
             pathname = pathname.slice(0, -1);
