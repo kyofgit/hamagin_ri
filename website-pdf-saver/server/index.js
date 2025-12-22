@@ -45,7 +45,11 @@ app.post('/api/crawl', async (req, res) => {
         return res.status(400).json({ error: '無効なURL形式です' });
     }
 
-    const jobId = uuidv4();
+    // 一時保存用ディレクトリ
+    const tempDir = path.join(outputDir, 'temp', jobId);
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+    }
 
     // ジョブを初期化
     jobs.set(jobId, {
@@ -56,7 +60,8 @@ app.post('/api/crawl', async (req, res) => {
         pages: [],
         error: null,
         pdfPath: null,
-        canceled: false, // キャンセル用フラグ
+        canceled: false,
+        tempDir: tempDir
     });
 
     res.json({ jobId });
@@ -67,8 +72,8 @@ app.post('/api/crawl', async (req, res) => {
             const job = jobs.get(jobId);
             const checkCancel = () => job.canceled;
 
-            // クローリング実行
-            const pages = await crawlWebsite(url, (progress) => {
+            // クローリング実行（HTMLをディスクに保存モード）
+            const pages = await crawlWebsite(url, tempDir, (progress) => {
                 job.totalPages = progress.totalFound;
                 job.processedPages = progress.processed;
                 job.currentUrl = progress.currentUrl;
@@ -78,7 +83,7 @@ app.post('/api/crawl', async (req, res) => {
                 console.log('クローリングがキャンセルされました。収集済みページでPDFを作成します。');
             }
 
-            job.pages = pages;
+            job.pages = pages; // メタデータのみ（パス含む）
             job.status = 'generating_pdf';
             job.processedPages = 0;
             job.totalPages = pages.length;
@@ -89,7 +94,7 @@ app.post('/api/crawl', async (req, res) => {
 
             // PDF生成
             const pdfPath = path.join(outputDir, `${jobId}.pdf`);
-            await generatePDF(pages, pdfPath, (progress) => {
+            await generatePDF(pages, pdfPath, tempDir, (progress) => {
                 job.processedPages = progress.processed;
             }, checkCancel);
 
@@ -105,6 +110,16 @@ app.post('/api/crawl', async (req, res) => {
             if (job) {
                 job.status = 'error';
                 job.error = error.message;
+            }
+        } finally {
+            // 一時ファイルの削除（ジョブ完了またはエラー後）
+            // デバッグのため、エラー時は残すなどの選択肢もあるが、容量圧迫を防ぐため削除推奨
+            // ただし、ダウンロードが終わるまでは...いや、PDF生成まで終わればいらないはず
+            // htmlと中間PDFはいらない。
+            try {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            } catch (e) {
+                console.error('一時ディレクトリ削除失敗:', e);
             }
         }
     })();

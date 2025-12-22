@@ -1,4 +1,6 @@
 import puppeteer from 'puppeteer';
+import fs from 'fs';
+import path from 'path';
 
 /**
  * ウェブサイトをクロールし、同一ドメイン内のページを収集
@@ -6,15 +8,16 @@ import puppeteer from 'puppeteer';
  * @param {function} onProgress - 進捗コールバック
  * @returns {Promise<Array>} ページ情報の配列
  */
-export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
+export async function crawlWebsite(baseUrl, tempDir, onProgress, checkCancel) {
     let browser;
     let page;
 
+    // ... (setupBrowser is unchanged) ...
     const setupBrowser = async () => {
         if (browser) await browser.close().catch(() => { });
         browser = await puppeteer.launch({
             headless: 'new',
-            protocolTimeout: 240000, // タイムアウトを4分に延長
+            protocolTimeout: 240000,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -25,6 +28,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
         });
     };
 
+    // ... (setupPage is unchanged) ...
     const setupPage = async () => {
         try {
             if (!browser || !browser.isConnected()) {
@@ -59,6 +63,8 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
         const queue = [normalizeUrl(baseUrl)];
         const pages = [];
 
+        let pageIndex = 0;
+
         while (queue.length > 0) {
             // キャンセルチェック
             if (checkCancel && checkCancel()) {
@@ -79,6 +85,8 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                 try {
                     console.log(`クローリング中: ${url} (残り試行回数: ${retries})`);
 
+                    if (!page) await setupPage();
+
                     // 進捗報告
                     onProgress({
                         totalFound: queue.length + pages.length + 1,
@@ -91,7 +99,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
 
                     if (!response || !response.ok()) {
                         console.log(`${url} をスキップします: レスポンスが正常ではありません`);
-                        success = true; // 正常にスキップできたことにする
+                        success = true;
                         continue;
                     }
 
@@ -111,10 +119,15 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                         };
                     });
 
+                    // HTMLを一時ファイルに保存
+                    const htmlFilename = `page_${pageIndex++}.html`;
+                    const htmlPath = path.join(tempDir, htmlFilename);
+                    fs.writeFileSync(htmlPath, pageInfo.html);
+
                     pages.push({
                         url,
                         title: pageInfo.title,
-                        html: pageInfo.html,
+                        htmlPath: htmlPath, // メモリにはパスだけ持つ
                     });
 
                     // 同一ドメインのリンクを収集
@@ -148,7 +161,7 @@ export async function crawlWebsite(baseUrl, onProgress, checkCancel) {
                     console.error(`${url} の処理中にエラーが発生しました:`, error.message);
 
                     // エラー時はページを作り直す（クラッシュ対策）
-                    await setupPage();
+                    await setupPage().catch(e => console.error('リカバリー失敗:', e));
 
                     retries--;
                     if (retries > 0) {

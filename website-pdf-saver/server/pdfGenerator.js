@@ -8,15 +8,16 @@ import fs from 'fs';
  * @param {string} outputPath - 出力ファイルパス
  * @param {function} onProgress - 進捗コールバック
  */
-export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
+export async function generatePDF(pages, outputPath, tempDir, onProgress, checkCancel) {
     let browser;
     let page;
 
+    // ... (setupBrowser unchanged) ...
     const setupBrowser = async () => {
         if (browser) await browser.close().catch(() => { });
         browser = await puppeteer.launch({
             headless: 'new',
-            protocolTimeout: 240000, // タイムアウトを4分に延長
+            protocolTimeout: 240000,
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
@@ -27,6 +28,7 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
         });
     };
 
+    // ... (setupPage unchanged) ...
     const setupPage = async () => {
         try {
             if (!browser || !browser.isConnected()) {
@@ -36,9 +38,13 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
             page = await browser.newPage();
         } catch (err) {
             console.error('PDF生成用ページ/ブラウザの作成に失敗:', err);
-            // ブラウザごと作り直す
-            await setupBrowser();
-            page = await browser.newPage();
+            try {
+                await setupBrowser();
+                page = await browser.newPage();
+            } catch (fatalError) {
+                console.error('致命的エラー: ブラウザの再起動にも失敗しました', fatalError);
+                throw fatalError;
+            }
         }
     };
 
@@ -46,7 +52,7 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
         await setupBrowser();
         await setupPage();
 
-        const pdfBuffers = [];
+        const pdfPaths = [];
 
         for (let i = 0; i < pages.length; i++) {
             // キャンセルチェック
@@ -66,12 +72,20 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
             });
 
             try {
+                // ディスクからHTMLを読み込む
+                let htmlContent = '';
+                try {
+                    htmlContent = fs.readFileSync(pageData.htmlPath, 'utf-8');
+                } catch (readError) {
+                    console.error(`${pageData.url} のHTML読み込みに失敗:`, readError);
+                    continue; // 読み込めなければスキップ
+                }
+
                 // HTMLを設定
-                await page.setContent(pageData.html, { waitUntil: 'networkidle2', timeout: 60000 });
+                await page.setContent(htmlContent, { waitUntil: 'networkidle2', timeout: 60000 });
 
                 // スタイルを調整してPDF向けに最適化
                 await page.evaluate(() => {
-                    // 印刷用スタイルを適用
                     const style = document.createElement('style');
                     style.textContent = `
             @media print {
@@ -91,7 +105,7 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
                     document.head.appendChild(style);
                 });
 
-                // ページヘッダーを追加（URL表示）
+                // ページヘッダーを追加
                 await page.evaluate((url) => {
                     const header = document.createElement('div');
                     header.style.cssText = `
@@ -106,7 +120,8 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
                     document.body.insertBefore(header, document.body.firstChild);
                 }, pageData.url);
 
-                // PDFを生成
+                // PDFを生成（バッファとして取得せず、一旦ファイルに書き出すのもありだが、
+                // page.pdf()はBufferを返すので、それを即座に書き出す）
                 const pdfBuffer = await page.pdf({
                     format: 'A4',
                     printBackground: true,
@@ -118,10 +133,16 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
                     },
                 });
 
-                pdfBuffers.push(pdfBuffer);
+                // 一時ファイルとして保存
+                const tempPdfPath = path.join(tempDir, `pdf_${i}.pdf`);
+                fs.writeFileSync(tempPdfPath, pdfBuffer);
+                pdfPaths.push(tempPdfPath);
+
+                // メモリ解放（V8のGCを助けるため）
+                // htmlContent = null; // ローカル変数なのでループ毎に解放されるはずだが念のため
+
             } catch (error) {
                 console.error(`${pageData.url} のPDF生成中にエラーが発生しました:`, error.message);
-                // エラー時はページを作り直す（クラッシュ対策）
                 await setupPage();
             }
         }
@@ -133,11 +154,14 @@ export async function generatePDF(pages, outputPath, onProgress, checkCancel) {
         console.log('PDFを結合中...');
         const mergedPdf = await PDFDocument.create();
 
-        for (const pdfBuffer of pdfBuffers) {
+        for (const tempPdfPath of pdfPaths) {
             try {
-                const pdf = await PDFDocument.load(pdfBuffer);
-                const pages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
-                pages.forEach(page => mergedPdf.addPage(page));
+                // ファイルから読み込む
+                const pdfBytes = fs.readFileSync(tempPdfPath);
+                const pdf = await PDFDocument.load(pdfBytes);
+                const copiedPages = await mergedPdf.copyPages(pdf, pdf.getPageIndices());
+                copiedPages.forEach(p => mergedPdf.addPage(p));
+                // ループスコープを抜ければ pdfBytes と pdf は解放される
             } catch (error) {
                 console.error('PDF結合中にエラーが発生しました:', error.message);
             }
