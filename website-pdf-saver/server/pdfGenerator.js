@@ -1,6 +1,7 @@
 import puppeteer from 'puppeteer';
 import { PDFDocument } from 'pdf-lib';
 import fs from 'fs';
+import path from 'path';
 
 /**
  * 複数ページのHTMLを一つのPDFとして生成
@@ -16,7 +17,7 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
     const setupBrowser = async () => {
         if (browser) await browser.close().catch(() => { });
         browser = await puppeteer.launch({
-            headless: 'new',
+            headless: true, // Legacy mode for stability
             protocolTimeout: 240000,
             args: [
                 '--no-sandbox',
@@ -36,6 +37,7 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
             }
             if (page) await page.close().catch(() => { });
             page = await browser.newPage();
+            page.setDefaultNavigationTimeout(60000);
         } catch (err) {
             console.error('PDF生成用ページ/ブラウザの作成に失敗:', err);
             try {
@@ -81,11 +83,11 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
 
                 if (!page) await setupPage();
 
+                // ビューポートを設定（レンダリングの安定化）
+                await page.setViewport({ width: 1280, height: 1024 });
+
                 // 画面表示モードをエミュレート（background graphicsなどを強制表示し、print用CSSによる非表示を回避）
                 await page.emulateMediaType('screen');
-
-                // JSを無効化（SPAの再ハイドレーションによるDOM破壊を防ぐため、収集した静的HTMLをそのままレンダリング）
-                await page.setJavaScriptEnabled(false);
 
                 // ディスクからHTMLを読み込む
                 let htmlContent = '';
@@ -96,45 +98,38 @@ export async function generatePDF(pages, outputPath, tempDir, onProgress, checkC
                     continue; // 読み込めなければスキップ
                 }
 
+                // 文字列操作でスタイルとヘッダーを注入（JS無効化環境での確実な適用のため）
+                const printStyle = `
+                <style>
+                    @media print {
+                        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+                        body { margin: 0; padding: 20px; }
+                        a { text-decoration: underline; }
+                    }
+                </style>`;
+
+                const headerHtml = `
+                    <div style="background: #f0f0f0; padding: 10px; margin-bottom: 20px; border-bottom: 2px solid #333; font-family: sans-serif; font-size: 12px;">
+                        <strong>📄 ${pageData.url}</strong>
+                    </div>`;
+
+                // </head>の直前にスタイルを挿入
+                if (htmlContent.includes('</head>')) {
+                    htmlContent = htmlContent.replace('</head>', `${printStyle}</head>`);
+                } else {
+                    htmlContent += printStyle;
+                }
+
+                // <body>の直後にヘッダーを挿入
+                if (htmlContent.includes('<body')) {
+                    // <body ...> の閉じタグを探す（簡易的）
+                    htmlContent = htmlContent.replace(/(<body[^>]*>)/i, `$1${headerHtml}`);
+                } else {
+                    htmlContent = `<body>${headerHtml}${htmlContent}</body>`;
+                }
+
                 // HTMLを設定 (JS無効なので load イベントで十分)
                 await page.setContent(htmlContent, { waitUntil: 'load', timeout: 60000 });
-
-                // (中略 - unchanged styles and header injection) ...
-                // スタイルを調整してPDF向けに最適化
-                await page.evaluate(() => {
-                    const style = document.createElement('style');
-                    style.textContent = `
-            @media print {
-              * {
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-              }
-              body {
-                margin: 0;
-                padding: 20px;
-              }
-              a {
-                text-decoration: underline;
-              }
-            }
-          `;
-                    document.head.appendChild(style);
-                });
-
-                // ページヘッダーを追加
-                await page.evaluate((url) => {
-                    const header = document.createElement('div');
-                    header.style.cssText = `
-            background: #f0f0f0;
-            padding: 10px;
-            margin-bottom: 20px;
-            border-bottom: 2px solid #333;
-            font-family: sans-serif;
-            font-size: 12px;
-          `;
-                    header.innerHTML = `<strong>📄 ${url}</strong>`;
-                    document.body.insertBefore(header, document.body.firstChild);
-                }, pageData.url);
 
 
                 // PDFを生成
