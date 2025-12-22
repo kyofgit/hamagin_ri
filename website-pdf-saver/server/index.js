@@ -16,6 +16,11 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 
+// ヘルスチェック（Render用）
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
 // ジョブの状態を保持
 const jobs = new Map();
 
@@ -196,6 +201,12 @@ if (process.env.NODE_ENV === 'production') {
         res.sendFile(path.join(__dirname, '../dist/index.html'));
     });
 }
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+    console.error('Unhandled Server Error:', err);
+    res.status(500).send('Internal Server Error');
+});
 
 app.listen(PORT, () => {
     console.log(`サーバーが起動しました: http://localhost:${PORT}`);
