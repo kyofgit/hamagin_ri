@@ -1,27 +1,87 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#F4F2ED" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#0E0E10" media="(prefers-color-scheme: dark)">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="description" content="飲み会のためのチンチロ。グループで順番に振って、出目を記録・分析。">
-  <title>チンチロ</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="icon.svg">
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Zen+Kaku+Gothic+New:wght@400;500;700;900&display=swap">
-  <link rel="stylesheet" href="css/style.css">
-  <script>try{var t=localStorage.getItem('cc_theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch(e){}</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0b0d">
+<meta name="description" content="飲み会のための、リアルタイムのチンチロ。みんなの出目を記録・分析">
+<title>チンチロ</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&display=swap">
+<link rel="stylesheet" href="style.css">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.4.0/firebase-app.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.4.0/firebase-auth.js">
+<link rel="modulepreload" href="https://www.gstatic.com/firebasejs/12.4.0/firebase-firestore.js">
+<script type="module" src="js/app.js"></script>
 </head>
 <body>
-  <div id="app"><div class="boot"><span class="boot-dot"></span></div></div>
-  <div id="toast" role="status" aria-live="polite"></div>
-  <script src="/socket.io/socket.io.min.js"></script>
-  <script type="module" src="js/app.js"></script>
+<div id="app">
+  <section id="splash" class="screen center">
+    <div class="logo-mark" aria-hidden="true"><i data-v="4"></i><i data-v="5"></i><i data-v="6"></i></div>
+  </section>
+
+  <section id="login" class="screen" hidden>
+    <div class="mosaic" aria-hidden="true">
+      <b style="--c:#FF6B57" data-v="4"></b><b style="--c:#FFD23F" data-v="5"></b><b style="--c:#3DD9A4" data-v="6"></b>
+      <b style="--c:#5C7CFF" data-v="1"></b><b style="--c:#FF6FB5" data-v="2"></b><b style="--c:#EDE8DF" data-v="3"></b>
+    </div>
+    <div class="login-body">
+      <h1 class="wordmark">Chin<br>chiro</h1>
+      <p class="lead">飲み会のための、リアルタイムのチンチロ。<br>みんなの出目を、ぜんぶ記録。</p>
+      <button id="btnLogin" class="btn-google">
+        <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>
+        Googleでログイン
+      </button>
+      <p id="inAppNote" class="note" hidden>アプリ内ブラウザではGoogleログインができません。メニューから「ブラウザで開く」を選んでください。</p>
+    </div>
+  </section>
+
+  <section id="room" class="screen" hidden>
+    <header class="bar">
+      <button id="roomTitle" class="title" aria-label="ルームの設定">
+        <span id="syncDot" class="sync"></span><span id="roomName"></span>
+      </button>
+      <nav class="actions">
+        <button class="ic" data-open="share" aria-label="招待" title="招待"><svg viewBox="0 0 24 24"><path d="M16 8a3 3 0 1 0 0-.01M8 14.5a3 3 0 1 0 0-.01M16 21a3 3 0 1 0 0-.01"/><path d="m10.6 13 3-2M10.6 16.5l3 2"/></svg></button>
+        <button class="ic" data-open="history" aria-label="記録" title="記録"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></button>
+        <button class="ic" data-open="stats" aria-label="分析" title="分析"><svg viewBox="0 0 24 24"><path d="M5 20V11M12 20V4M19 20v-6"/></svg></button>
+        <button class="ic" data-open="settings" aria-label="設定" title="設定"><svg viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></svg></button>
+      </nav>
+    </header>
+    <main id="play">
+      <div class="strip">
+        <span class="rno">Round <b id="roundNo"></b></span>
+        <div id="prog" class="prog"></div>
+        <span id="roundCount" class="rcount"></span>
+      </div>
+      <div id="turn" class="turn"></div>
+      <div class="stage">
+        <div id="bowl" class="bowl"><span class="die" data-v="4"></span><span class="die" data-v="5"></span><span class="die" data-v="6"></span></div>
+        <div id="hand" class="hand"></div>
+      </div>
+      <div id="controls" class="controls"></div>
+      <div id="lineup" class="lineup"></div>
+    </main>
+  </section>
+
+  <section id="msg" class="screen center" hidden>
+    <div class="msg-box">
+      <h2 id="msgTitle"></h2>
+      <p id="msgText"></p>
+      <div id="msgActions" class="stack"></div>
+    </div>
+  </section>
+</div>
+
+<dialog id="sheet" class="sheet"><div id="sheetInner" class="sheet-inner"></div></dialog>
+<dialog id="ask" class="ask"><form method="dialog" class="ask-inner">
+  <p id="askText"></p>
+  <div class="ask-btns"><button value="no" class="btn ghost">キャンセル</button><button value="ok" id="askOk" class="btn">OK</button></div>
+</form></dialog>
+<div id="result" class="result" hidden></div>
+<div id="toasts" class="toasts" aria-live="polite" popover="manual"></div>
 </body>
 </html>

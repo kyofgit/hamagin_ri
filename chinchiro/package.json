@@ -1,21 +1,19 @@
 {
   "name": "chinchiro",
   "version": "1.0.0",
-  "description": "飲み会用チンチロアプリ（グループ・記録・分析つき）",
+  "description": "飲み会用チンチロ（Firebase版・マルチカウンターと同じ構成）",
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server/index.js",
-    "dev": "node --watch server/index.js",
     "test": "node --test test/*.test.js",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "emulators": "firebase emulators:start --only auth,firestore,hosting --project demo-chinchiro",
+    "deploy": "firebase deploy --only hosting:chinchiro,firestore:rules --project multi-counter-2f556 --non-interactive"
   },
   "engines": {
     "node": ">=20"
   },
-  "dependencies": {
-    "express": "^5.1.0",
-    "pg": "^8.16.0",
-    "socket.io": "^4.8.1"
+  "devDependencies": {
+    "firebase": "^12.4.0"
   }
 }

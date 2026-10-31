@@ -1,0 +1,56 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+
+    // ===== マルチカウンター（既存・変更なし） =====
+    function validRoom() {
+      let d = request.resource.data;
+      return d.get('counters', {}).size() <= 12 && d.get('name', '').size() <= 40;
+    }
+
+    // ルーム: IDを知っているログイン済みユーザーは誰でも読み書き可（一覧取得は不可）
+    match /rooms/{roomId} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid && validRoom();
+      allow update: if signedIn() && validRoom()
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if signedIn() && resource.data.createdBy == request.auth.uid;
+
+      match /logs/{logId} {
+        allow read: if signedIn();
+        allow create: if signedIn() && request.resource.data.by == request.auth.uid;
+      }
+    }
+
+    // 個人データ（最近のルーム・保存した設定）は本人のみ
+    match /users/{uid}/{document=**} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ===== チンチロ =====
+    function validChinchiro() {
+      let d = request.resource.data;
+      return d.get('members', {}).size() <= 12 && d.get('name', '').size() <= 40;
+    }
+
+    // ルーム: IDを知っているログイン済みユーザーは誰でも読み書き可（一覧取得は不可）
+    match /chinchiroRooms/{roomId} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.createdBy == request.auth.uid && validChinchiro();
+      allow update: if signedIn() && validChinchiro()
+        && request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if signedIn() && resource.data.createdBy == request.auth.uid;
+
+      // 出目の記録（100件ずつ）。ルームIDを知っていれば読み書き可
+      match /chunks/{chunkId} {
+        allow read, write: if signedIn();
+      }
+    }
+
+    // 個人データ（最近のルーム・表示名・色）は本人のみ
+    match /chinchiroUsers/{uid} {
+      allow read, write: if signedIn() && request.auth.uid == uid;
+    }
+  }
+}

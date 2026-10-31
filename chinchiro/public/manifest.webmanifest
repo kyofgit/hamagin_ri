@@ -1,9 +1,16 @@
 {
   "name": "チンチロ",
   "short_name": "チンチロ",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#F4F2ED",
-  "theme_color": "#F4F2ED",
-  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#0b0b0d",
+  "theme_color": "#0b0b0d",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
 }

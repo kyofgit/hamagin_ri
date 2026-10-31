@@ -1,0 +1,12 @@
+{
+  "projects": {
+    "default": "multi-counter-2f556"
+  },
+  "targets": {
+    "multi-counter-2f556": {
+      "hosting": {
+        "chinchiro": []
+      }
+    }
+  }
+}
