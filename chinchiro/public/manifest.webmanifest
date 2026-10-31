@@ -1,0 +1,9 @@
+{
+  "name": "チンチロ",
+  "short_name": "チンチロ",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F4F2ED",
+  "theme_color": "#F4F2ED",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}
